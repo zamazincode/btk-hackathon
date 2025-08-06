@@ -9,6 +9,7 @@ import {
     Book,
     Hash,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 // Tip tanımlamaları - Felsefe yapısı için
 interface Aciklama {
@@ -127,22 +128,28 @@ const YKS_DERSLERI = [
     },
 ];
 
-interface SelectedItem {
+
+interface CheckboxSelection {
+    id: string;
+    type: "ders" | "sinif" | "konu" | "kazanim" | "aciklama";
     ders: string;
     sinif?: string;
     konu?: string;
     kazanim?: string;
     aciklama?: string;
-    path?: string;
+    title: string;
+    path: string;
 }
 
 const YKSKazanimlar: React.FC = () => {
+    const router = useRouter();
     const [selectedDers, setSelectedDers] = useState<string>("");
     const [dersData, setDersData] = useState<YKSData | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string>("");
     const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
-    const [selectedItem, setSelectedItem] = useState<SelectedItem | null>(null);
+    const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set());
+    const [showSelectionPanel, setShowSelectionPanel] = useState<boolean>(true);
 
     // JSON dosyasını yükle
     const loadDersData = async (dersName: string) => {
@@ -181,7 +188,6 @@ const YKSKazanimlar: React.FC = () => {
     // Ders seçildiğinde
     const handleDersSelect = (dersName: string) => {
         setSelectedDers(dersName);
-        setSelectedItem(null);
         setExpandedItems(new Set());
         loadDersData(dersName);
     };
@@ -197,9 +203,278 @@ const YKSKazanimlar: React.FC = () => {
         setExpandedItems(newExpanded);
     };
 
-    // Öğe seçimi
-    const handleSelect = (selection: SelectedItem) => {
-        setSelectedItem(selection);
+
+    // Checkbox işlemleri
+    const handleCheckboxChange = (itemId: string, checked: boolean) => {
+        const newCheckedItems = new Set(checkedItems);
+        if (checked) {
+            newCheckedItems.add(itemId);
+        } else {
+            newCheckedItems.delete(itemId);
+        }
+        setCheckedItems(newCheckedItems);
+    };
+
+    const clearAllSelections = () => {
+        setCheckedItems(new Set());
+    };
+
+    const getSelectedItemsData = (): CheckboxSelection[] => {
+        const selectedData: CheckboxSelection[] = [];
+        
+        if (!dersData || !selectedDers) return selectedData;
+
+        // Seçilen her checkbox ID'sini analiz et
+        Array.from(checkedItems).forEach(itemId => {
+            const parts = itemId.split('-');
+            
+            if (parts.length >= 2) {
+                const ders = parts[0];
+                const sinif = parts[1];
+                
+                if (parts.length === 2) {
+                    // Sınıf seçimi
+                    selectedData.push({
+                        id: itemId,
+                        type: "sinif",
+                        ders,
+                        sinif,
+                        title: `${sinif}. Sınıf`,
+                        path: itemId
+                    });
+                } else if (parts.length === 3) {
+                    // Konu seçimi (Felsefe tipi) veya Ana Konu (Kimya tipi)
+                    const konuKey = parts[2];
+                    let konuTitle = konuKey;
+                    let konuValue = konuKey; // Konu içeriği
+                    
+                    try {
+                        const dersContent = dersData.yks[ders] as any;
+                        const sinifContent = dersContent?.[sinif];
+                        
+                        if (isDersKimyaType(dersData, ders)) {
+                            // Kimya tipi
+                            if (sinifContent?.alt?.[konuKey]) {
+                                konuTitle = sinifContent.alt[konuKey].baslik || konuKey;
+                                konuValue = konuTitle; // Başlığı konu olarak kullan
+                            }
+                        } else {
+                            // Felsefe tipi - konular direkt sinif altında
+                            konuValue = konuKey; // Felsefe'de konu key'leri zaten isimler
+                            konuTitle = konuKey;
+                        }
+                    } catch (e) {
+                        console.warn('Konu bilgisi bulunamadı:', itemId);
+                    }
+                    
+                    selectedData.push({
+                        id: itemId,
+                        type: "konu",
+                        ders,
+                        sinif,
+                        konu: konuValue,
+                        title: konuTitle,
+                        path: itemId
+                    });
+                } else if (parts.length >= 4) {
+                    // Kazanım seçimi
+                    const konuKey = parts[2];
+                    const kazanimKey = parts[3];
+                    let title = kazanimKey;
+                    let konuValue = konuKey;
+                    let kazanimValue = kazanimKey;
+                    
+                    // Başlık bilgisini almaya çalış
+                    try {
+                        const dersContent = dersData.yks[ders] as any;
+                        const sinifContent = dersContent?.[sinif];
+                        
+                        if (isDersKimyaType(dersData, ders)) {
+                            // Kimya tipi
+                            if (sinifContent?.alt?.[konuKey]) {
+                                // Konu başlığını al
+                                konuValue = sinifContent.alt[konuKey].baslik || konuKey;
+                                
+                                const findItemByPath = (item: any, pathParts: string[], index: number): any => {
+                                    if (index >= pathParts.length - 1) return item;
+                                    const nextKey = pathParts[index + 1];
+                                    return item.alt?.[nextKey] ? findItemByPath(item.alt[nextKey], pathParts, index + 1) : null;
+                                };
+                                
+                                const item = findItemByPath(sinifContent.alt[konuKey], parts, 2);
+                                if (item?.baslik) {
+                                    title = item.baslik;
+                                    kazanimValue = item.baslik; // Kazanım başlığını kullan
+                                }
+                            }
+                        } else {
+                            // Felsefe tipi
+                            konuValue = konuKey; // Felsefe'de konu key'leri zaten isimler
+                            if (sinifContent?.[konuKey]?.[kazanimKey]) {
+                                const kazanimData = sinifContent[konuKey][kazanimKey];
+                                if (kazanimData?.baslik) {
+                                    title = kazanimData.baslik;
+                                    kazanimValue = kazanimData.baslik; // Kazanım başlığını kullan
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('Title bulunamadı:', itemId);
+                    }
+                    
+                    selectedData.push({
+                        id: itemId,
+                        type: "kazanim",
+                        ders,
+                        sinif,
+                        konu: konuValue,
+                        kazanim: kazanimValue,
+                        title,
+                        path: itemId
+                    });
+                }
+            }
+        });
+
+        return selectedData;
+    };
+
+    // Müfredat aksiyonları işleyicisi
+    const handleCurriculumAction = (action: string) => {
+        const selectedData = getSelectedItemsData();
+        
+        if (selectedData.length === 0) {
+            alert("Lütfen en az bir konu seçin");
+            return;
+        }
+
+        // Seçilen konular için veri formatını hazırla - müfredat içeriğini de ekle
+        const topicsData = selectedData.map(item => {
+            // Path'i parse ederek orijinal key'leri alalım
+            const pathParts = item.path.split('-');
+            const originalDers = pathParts[0];
+            const originalSinif = pathParts[1];
+            const originalKonuKey = pathParts[2] || "";
+            const originalKazanimKey = pathParts[3] || "";
+            
+            const topicData: any = {
+                ders: item.ders, // Ders adı (kimya, felsefe vb.)
+                sinif: item.sinif || "",
+                konu: item.konu || "", // Konu başlığı
+                kazanim: item.kazanim || "", // Kazanım başlığı
+                title: item.title,
+                aciklama: "", // Açıklama içeriğini alacağız
+                path: item.path,
+                type: item.type
+            };
+
+            // Müfredat içeriğini ekle - orijinal key'leri kullanarak
+            if (dersData && originalDers) {
+                const dersContent = dersData.yks[originalDers] as any;
+                if (dersContent && originalSinif) {
+                    const sinifContent = dersContent[originalSinif];
+                    
+                    if (isDersKimyaType(dersData, originalDers)) {
+                        // Kimya tipi - alt yapısından içeriği al
+                        if (sinifContent?.alt && originalKonuKey) {
+                            const konuContent = sinifContent.alt[originalKonuKey];
+                            if (konuContent) {
+                                // Konu seviyesindeki bilgileri ekle
+                                topicData.mufredat_icerigi = {
+                                    baslik: konuContent.baslik,
+                                    anahtar_kavramlar: konuContent.anahtar_kavramlar
+                                };
+                                
+                                // Kazanım seviyesindeki içeriği de ekle
+                                if (originalKazanimKey && konuContent.alt) {
+                                    // Nested yapıyı dolaş
+                                    const findKazanim = (obj: any, remainingPath: string[]): any => {
+                                        if (remainingPath.length === 0) return obj;
+                                        const nextKey = remainingPath[0];
+                                        if (obj.alt && obj.alt[nextKey]) {
+                                            return findKazanim(obj.alt[nextKey], remainingPath.slice(1));
+                                        }
+                                        return null;
+                                    };
+                                    
+                                    // Path'in konu sonrası kısmını al
+                                    const kazanimPath = pathParts.slice(3);
+                                    const kazanimContent = findKazanim(konuContent, kazanimPath);
+                                    
+                                    if (kazanimContent) {
+                                        topicData.kazanim_detay = {
+                                            baslik: kazanimContent.baslik,
+                                            anahtar_kavramlar: kazanimContent.anahtar_kavramlar,
+                                            aciklama: kazanimContent.aciklama
+                                        };
+                                        
+                                        // Açıklamaları birleştir
+                                        if (kazanimContent.aciklama && typeof kazanimContent.aciklama === 'object') {
+                                            const aciklamalar = Object.entries(kazanimContent.aciklama)
+                                                .map(([key, value]) => `${key}) ${value}`)
+                                                .join(' ');
+                                            topicData.aciklama = aciklamalar;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Felsefe tipi
+                        if (sinifContent && originalKonuKey) {
+                            const konuContent = sinifContent[originalKonuKey];
+                            if (konuContent && originalKazanimKey) {
+                                const kazanimContent = konuContent[originalKazanimKey];
+                                if (kazanimContent) {
+                                    topicData.mufredat_icerigi = {
+                                        baslik: kazanimContent.baslik,
+                                        aciklama: kazanimContent.aciklama
+                                    };
+                                    
+                                    // Açıklamaları birleştir
+                                    if (kazanimContent.aciklama && typeof kazanimContent.aciklama === 'object') {
+                                        const aciklamalar = Object.entries(kazanimContent.aciklama)
+                                            .map(([key, value]) => `${key}) ${value}`)
+                                            .join(' ');
+                                        topicData.aciklama = aciklamalar;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return topicData;
+        });
+
+        // Session storage'a veriyi kaydet
+        sessionStorage.setItem('selectedCurriculumTopics', JSON.stringify(topicsData));
+        sessionStorage.setItem('curriculumActionType', action);
+
+        // İlgili sayfaya yönlendir
+        switch (action) {
+            case 'questions':
+                router.push('/curriculum/questions');
+                break;
+            case 'summary':
+                router.push('/curriculum/summary');
+                break;
+            case 'concept-map':
+                router.push('/curriculum/concept-map');
+                break;
+            case 'explanation':
+                router.push('/curriculum/explanation');
+                break;
+            case 'ai-chat':
+                router.push('/curriculum/ai-chat');
+                break;
+            case 'socratic':
+                router.push('/curriculum/socratic');
+                break;
+            default:
+                console.error('Unknown action:', action);
+        }
     };
 
     // Felsefe tipi için render fonksiyonları
@@ -209,22 +484,21 @@ const YKSKazanimlar: React.FC = () => {
                 {Object.entries(aciklama).map(([key, value]) => (
                     <div
                         key={`${parentKey}-${key}`}
-                        className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                            selectedItem?.aciklama === key &&
-                            selectedItem?.kazanim === parentKey
-                                ? "bg-blue-100 border-blue-300"
-                                : "bg-gray-50 border-gray-200 hover:bg-gray-100"
-                        }`}
-                        onClick={() =>
-                            handleSelect({
-                                ders: selectedDers,
-                                aciklama: key,
-                                kazanim: parentKey,
-                                path: `${parentKey}-${key}`,
-                            })
-                        }
+                        className="p-3 rounded-lg border cursor-pointer transition-colors bg-gray-50 border-gray-200 hover:bg-gray-100"
+                        onClick={() => {
+                            // Tıklamalarda artık handleSelect yok
+                        }}
                     >
                         <div className="flex items-start gap-2">
+                            <input
+                                type="checkbox"
+                                checked={checkedItems.has(`${selectedDers}-${parentKey}-${key}`)}
+                                onChange={(e) => {
+                                    e.stopPropagation();
+                                    handleCheckboxChange(`${selectedDers}-${parentKey}-${key}`, e.target.checked);
+                                }}
+                                className="mt-1 flex-shrink-0"
+                            />
                             <span className="text-xs font-medium text-blue-600 bg-blue-100 px-2 py-1 rounded">
                                 {key}
                             </span>
@@ -249,24 +523,23 @@ const YKSKazanimlar: React.FC = () => {
         return (
             <div key={kazanimKey} className="ml-4">
                 <div
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                        selectedItem?.kazanim === kazanimKey &&
-                        !selectedItem?.aciklama
-                            ? "bg-green-100 border-green-300"
-                            : "bg-white border-gray-200 hover:bg-gray-50"
-                    }`}
+                    className="p-3 rounded-lg border cursor-pointer transition-colors bg-white border-gray-200 hover:bg-gray-50"
                 >
                     <div
                         className="flex items-center gap-2"
                         onClick={() => {
                             toggleExpanded(fullKey);
-                            handleSelect({
-                                ders: selectedDers,
-                                kazanim: kazanimKey,
-                                path: fullKey,
-                            });
                         }}
                     >
+                        <input
+                            type="checkbox"
+                            checked={checkedItems.has(fullKey)}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                handleCheckboxChange(fullKey, e.target.checked);
+                            }}
+                            className="flex-shrink-0"
+                        />
                         {isExpanded ? (
                             <ChevronDown size={16} />
                         ) : (
@@ -296,30 +569,34 @@ const YKSKazanimlar: React.FC = () => {
         return (
             <div key={konuKey} className="ml-2">
                 <div
-                    className={`p-4 rounded-lg border cursor-pointer transition-colors ${
-                        selectedItem?.konu === konuKey && !selectedItem?.kazanim
-                            ? "bg-purple-100 border-purple-300"
-                            : "bg-white border-gray-200 hover:bg-gray-50"
-                    }`}
-                    onClick={() => {
-                        toggleExpanded(fullKey);
-                        handleSelect({
-                            ders: selectedDers,
-                            konu: konuKey,
-                            path: fullKey,
-                        });
-                    }}
+                    className="p-4 rounded-lg border cursor-pointer transition-colors bg-white border-gray-200 hover:bg-gray-50"
                 >
                     <div className="flex items-center gap-2">
-                        {isExpanded ? (
-                            <ChevronDown size={18} />
-                        ) : (
-                            <ChevronRight size={18} />
-                        )}
-                        <Book size={18} className="text-purple-600" />
-                        <span className="font-semibold text-purple-700">
-                            {konuKey}
-                        </span>
+                        <input
+                            type="checkbox"
+                            checked={checkedItems.has(fullKey)}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                handleCheckboxChange(fullKey, e.target.checked);
+                            }}
+                            className="flex-shrink-0"
+                        />
+                        <div 
+                            className="flex items-center gap-2 flex-1 cursor-pointer"
+                            onClick={() => {
+                                toggleExpanded(fullKey);
+                            }}
+                        >
+                            {isExpanded ? (
+                                <ChevronDown size={18} />
+                            ) : (
+                                <ChevronRight size={18} />
+                            )}
+                            <Book size={18} className="text-purple-600" />
+                            <span className="font-semibold text-purple-700">
+                                {konuKey}
+                            </span>
+                        </div>
                     </div>
                 </div>
 
@@ -382,37 +659,39 @@ const YKSKazanimlar: React.FC = () => {
         };
 
         const colors = getColorByLevel(level);
-        const isSelected = selectedItem?.path === fullKey;
 
         return (
             <div key={itemKey} style={{ marginLeft: `${level * 16}px` }}>
                 <div
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                        isSelected
-                            ? `${colors.bg} ${colors.border}`
-                            : "bg-white border-gray-200 hover:bg-gray-50"
-                    }`}
-                    onClick={() => {
-                        if (hasChildren) {
-                            toggleExpanded(fullKey);
-                        }
-                        handleSelect({
-                            ders: selectedDers,
-                            path: fullKey,
-                            kazanim: itemKey,
-                        });
-                    }}
+                    className="p-3 rounded-lg border cursor-pointer transition-colors bg-white border-gray-200 hover:bg-gray-50"
                 >
                     <div className="flex items-start gap-2">
-                        {hasChildren &&
-                            (isExpanded ? (
-                                <ChevronDown size={16} />
-                            ) : (
-                                <ChevronRight size={16} />
-                            ))}
-                        {!hasChildren && <div className="w-4" />}
-                        <Hash size={16} className={colors.icon} />
-                        <div className="flex-1">
+                        <input
+                            type="checkbox"
+                            checked={checkedItems.has(fullKey)}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                handleCheckboxChange(fullKey, e.target.checked);
+                            }}
+                            className="mt-1 flex-shrink-0"
+                        />
+                        <div 
+                            className="flex items-start gap-2 flex-1 cursor-pointer"
+                            onClick={() => {
+                                if (hasChildren) {
+                                    toggleExpanded(fullKey);
+                                }
+                            }}
+                        >
+                            {hasChildren &&
+                                (isExpanded ? (
+                                    <ChevronDown size={16} />
+                                ) : (
+                                    <ChevronRight size={16} />
+                                ))}
+                            {!hasChildren && <div className="w-4" />}
+                            <Hash size={16} className={colors.icon} />
+                            <div className="flex-1">
                             <div className="flex items-center gap-2 mb-1">
                                 <span className={`font-medium ${colors.text}`}>
                                     {itemKey}
@@ -445,6 +724,7 @@ const YKSKazanimlar: React.FC = () => {
                                         )}
                                     </div>
                                 )}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -461,41 +741,51 @@ const YKSKazanimlar: React.FC = () => {
     };
 
     const renderKiSinif = (sinif: KiSinif, sinifKey: string) => {
-        const isExpanded = expandedItems.has(sinifKey);
+        const fullSinifKey = `${selectedDers}-${sinifKey}`;
+        const isExpanded = expandedItems.has(fullSinifKey);
 
         return (
             <div key={sinifKey} className="mb-4">
                 <div
-                    className={`p-4 rounded-lg border cursor-pointer transition-colors ${
-                        selectedItem?.sinif === sinifKey && !selectedItem?.path
-                            ? "bg-blue-100 border-blue-300"
-                            : "bg-white border-gray-300 hover:bg-gray-50"
-                    }`}
-                    onClick={() => {
-                        toggleExpanded(sinifKey);
-                        handleSelect({
-                            ders: selectedDers,
-                            sinif: sinifKey,
-                        });
-                    }}
+                    className="p-4 rounded-lg border cursor-pointer transition-colors bg-white border-gray-300 hover:bg-gray-50"
                 >
                     <div className="flex items-center gap-3">
-                        {isExpanded ? (
-                            <ChevronDown size={20} />
-                        ) : (
-                            <ChevronRight size={20} />
-                        )}
-                        <BookOpen size={20} className="text-blue-600" />
-                        <span className="text-lg font-bold text-blue-700">
-                            {sinifKey}. Sınıf
-                        </span>
+                        <input
+                            type="checkbox"
+                            checked={checkedItems.has(`${selectedDers}-${sinifKey}`)}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                handleCheckboxChange(`${selectedDers}-${sinifKey}`, e.target.checked);
+                            }}
+                            className="flex-shrink-0"
+                        />
+                        <div 
+                            className="flex items-center gap-3 flex-1 cursor-pointer"
+                            onClick={() => {
+                                toggleExpanded(fullSinifKey);
+                                handleSelect({
+                                    ders: selectedDers,
+                                    sinif: sinifKey,
+                                });
+                            }}
+                        >
+                            {isExpanded ? (
+                                <ChevronDown size={20} />
+                            ) : (
+                                <ChevronRight size={20} />
+                            )}
+                            <BookOpen size={20} className="text-blue-600" />
+                            <span className="text-lg font-bold text-blue-700">
+                                {sinifKey}. Sınıf
+                            </span>
+                        </div>
                     </div>
                 </div>
 
                 {isExpanded && sinif.alt && (
                     <div className="mt-3 space-y-3">
                         {Object.entries(sinif.alt).map(([konuKey, konu]) =>
-                            renderKiItem(konu, konuKey, sinifKey, 0),
+                            renderKiItem(konu, konuKey, `${selectedDers}-${sinifKey}`, 0),
                         )}
                     </div>
                 )}
@@ -505,7 +795,8 @@ const YKSKazanimlar: React.FC = () => {
 
     // Felsefe tipi için sınıf render
     const renderFeSinif = (sinif: FeSinif, sinifKey: string) => {
-        const isExpanded = expandedItems.has(sinifKey);
+        const fullSinifKey = `${selectedDers}-${sinifKey}`;
+        const isExpanded = expandedItems.has(fullSinifKey);
 
         return (
             <div key={sinifKey} className="mb-4">
@@ -515,31 +806,44 @@ const YKSKazanimlar: React.FC = () => {
                             ? "bg-blue-100 border-blue-300"
                             : "bg-white border-gray-300 hover:bg-gray-50"
                     }`}
-                    onClick={() => {
-                        toggleExpanded(sinifKey);
-                        handleSelect({
-                            ders: selectedDers,
-                            sinif: sinifKey,
-                        });
-                    }}
                 >
                     <div className="flex items-center gap-3">
-                        {isExpanded ? (
-                            <ChevronDown size={20} />
-                        ) : (
-                            <ChevronRight size={20} />
-                        )}
-                        <BookOpen size={20} className="text-blue-600" />
-                        <span className="text-lg font-bold text-blue-700">
-                            {sinifKey}. Sınıf
-                        </span>
+                        <input
+                            type="checkbox"
+                            checked={checkedItems.has(`${selectedDers}-${sinifKey}`)}
+                            onChange={(e) => {
+                                e.stopPropagation();
+                                handleCheckboxChange(`${selectedDers}-${sinifKey}`, e.target.checked);
+                            }}
+                            className="flex-shrink-0"
+                        />
+                        <div 
+                            className="flex items-center gap-3 flex-1 cursor-pointer"
+                            onClick={() => {
+                                toggleExpanded(fullSinifKey);
+                                handleSelect({
+                                    ders: selectedDers,
+                                    sinif: sinifKey,
+                                });
+                            }}
+                        >
+                            {isExpanded ? (
+                                <ChevronDown size={20} />
+                            ) : (
+                                <ChevronRight size={20} />
+                            )}
+                            <BookOpen size={20} className="text-blue-600" />
+                            <span className="text-lg font-bold text-blue-700">
+                                {sinifKey}. Sınıf
+                            </span>
+                        </div>
                     </div>
                 </div>
 
                 {isExpanded && (
                     <div className="mt-3 space-y-3">
                         {Object.entries(sinif).map(([konuKey, konu]) =>
-                            renderFeKonu(konu, konuKey, sinifKey),
+                            renderFeKonu(konu, konuKey, `${selectedDers}-${sinifKey}`),
                         )}
                     </div>
                 )}
@@ -565,10 +869,10 @@ const YKSKazanimlar: React.FC = () => {
                 </h2>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
                     {YKS_DERSLERI.map((ders) => (
-                        <button
+                        <div
                             key={ders.name}
                             onClick={() => handleDersSelect(ders.name)}
-                            className={`p-3 rounded-lg border transition-all ${
+                            className={`p-3 rounded-lg border transition-all cursor-pointer ${
                                 selectedDers === ders.name
                                     ? "bg-blue-600 text-white border-blue-600 shadow-lg"
                                     : "bg-white text-gray-700 border-gray-200 hover:bg-blue-50 hover:border-blue-300"
@@ -577,10 +881,145 @@ const YKSKazanimlar: React.FC = () => {
                             <div className="text-sm font-medium">
                                 {ders.displayName}
                             </div>
-                        </button>
+                        </div>
                     ))}
                 </div>
             </div>
+
+            {/* Seçim Paneli */}
+            {selectedDers && (
+                <div className="mb-8 bg-white rounded-lg border border-gray-200 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-semibold text-gray-800">
+                            Seçilen Konular ({checkedItems.size})
+                        </h2>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setShowSelectionPanel(!showSelectionPanel)}
+                                className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                            >
+                                {showSelectionPanel ? "Gizle" : "Göster"}
+                            </button>
+                            <button
+                                onClick={clearAllSelections}
+                                className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                                disabled={checkedItems.size === 0}
+                            >
+                                Tümünü Temizle
+                            </button>
+                        </div>
+                    </div>
+
+                    {showSelectionPanel && checkedItems.size > 0 && (
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                            {getSelectedItemsData().map((item) => (
+                                <div key={item.id} className="flex items-center justify-between bg-gray-50 p-2 rounded">
+                                    <div>
+                                        <span className="text-sm font-medium">{item.title}</span>
+                                        <div className="text-xs text-gray-500">
+                                            {item.type === "ders" && "Ders"}
+                                            {item.type === "sinif" && "Sınıf"}
+                                            {item.type === "konu" && "Konu"}
+                                            {item.type === "kazanim" && "Kazanım"}
+                                            {item.type === "aciklama" && "Açıklama"}
+                                            {item.sinif && ` • ${item.sinif}. Sınıf`}
+                                            {item.konu && ` • ${item.konu}`}
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => handleCheckboxChange(item.id, false)}
+                                        className="text-red-500 hover:text-red-700 text-sm"
+                                    >
+                                        Kaldır
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {checkedItems.size === 0 && (
+                        <p className="text-gray-500 text-sm">
+                            Henüz hiç konu seçilmedi. Aşağıdaki kazanımlardan seçim yapabilirsiniz.
+                        </p>
+                    )}
+
+                    {/* Devam Et Butonu ve İşlevler */}
+                    {checkedItems.size > 0 && (
+                        <div className="mt-6 border-t pt-6">
+                            <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                                Seçilen Konularla Devam Et
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                <button
+                                    onClick={() => handleCurriculumAction('questions')}
+                                    className="flex items-center gap-2 px-4 py-3 bg-green-100 text-green-800 rounded-lg hover:bg-green-200 transition-colors"
+                                >
+                                    <span className="text-lg">❓</span>
+                                    <div className="text-left">
+                                        <div className="font-medium">Soru Hazırla</div>
+                                        <div className="text-xs">Seçilen konulardan sorular oluştur</div>
+                                    </div>
+                                </button>
+
+                                <button
+                                    onClick={() => handleCurriculumAction('summary')}
+                                    className="flex items-center gap-2 px-4 py-3 bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 transition-colors"
+                                >
+                                    <span className="text-lg">📝</span>
+                                    <div className="text-left">
+                                        <div className="font-medium">Konu Özetle</div>
+                                        <div className="text-xs">Kapsamlı özet hazırla</div>
+                                    </div>
+                                </button>
+
+                                <button
+                                    onClick={() => handleCurriculumAction('concept-map')}
+                                    className="flex items-center gap-2 px-4 py-3 bg-purple-100 text-purple-800 rounded-lg hover:bg-purple-200 transition-colors"
+                                >
+                                    <span className="text-lg">🗺️</span>
+                                    <div className="text-left">
+                                        <div className="font-medium">Kavram Haritası</div>
+                                        <div className="text-xs">Mantık bağlantıları oluştur</div>
+                                    </div>
+                                </button>
+
+                                <button
+                                    onClick={() => handleCurriculumAction('explanation')}
+                                    className="flex items-center gap-2 px-4 py-3 bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200 transition-colors"
+                                >
+                                    <span className="text-lg">📚</span>
+                                    <div className="text-left">
+                                        <div className="font-medium">Konu Anlatımı</div>
+                                        <div className="text-xs">Detaylı açıklama</div>
+                                    </div>
+                                </button>
+
+                                <button
+                                    onClick={() => handleCurriculumAction('ai-chat')}
+                                    className="flex items-center gap-2 px-4 py-3 bg-cyan-100 text-cyan-800 rounded-lg hover:bg-cyan-200 transition-colors"
+                                >
+                                    <span className="text-lg">🤖</span>
+                                    <div className="text-left">
+                                        <div className="font-medium">AI ile Devam Et</div>
+                                        <div className="text-xs">Serbest sohbet ve sorular</div>
+                                    </div>
+                                </button>
+
+                                <button
+                                    onClick={() => handleCurriculumAction('socratic')}
+                                    className="flex items-center gap-2 px-4 py-3 bg-yellow-100 text-yellow-800 rounded-lg hover:bg-yellow-200 transition-colors"
+                                >
+                                    <span className="text-lg">🎯</span>
+                                    <div className="text-left">
+                                        <div className="font-medium">Sokratik AI</div>
+                                        <div className="text-xs">Soru-cevap öğrenme</div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Yükleme Durumu */}
             {loading && (
@@ -599,50 +1038,6 @@ const YKSKazanimlar: React.FC = () => {
                 </div>
             )}
 
-            {/* Seçilen Öğe Bilgisi */}
-            {selectedItem && (
-                <div className="mb-6 p-4 bg-white rounded-lg border border-gray-200 shadow">
-                    <h3 className="font-semibold text-gray-800 mb-2">
-                        Seçilen:
-                    </h3>
-                    <div className="text-sm text-gray-600 space-y-1">
-                        <div>
-                            <strong>Ders:</strong>{" "}
-                            {
-                                YKS_DERSLERI.find(
-                                    (d) => d.name === selectedItem.ders,
-                                )?.displayName
-                            }
-                        </div>
-                        {selectedItem.sinif && (
-                            <div>
-                                <strong>Sınıf:</strong> {selectedItem.sinif}
-                            </div>
-                        )}
-                        {selectedItem.konu && (
-                            <div>
-                                <strong>Konu:</strong> {selectedItem.konu}
-                            </div>
-                        )}
-                        {selectedItem.kazanim && (
-                            <div>
-                                <strong>Kazanım:</strong> {selectedItem.kazanim}
-                            </div>
-                        )}
-                        {selectedItem.aciklama && (
-                            <div>
-                                <strong>Açıklama:</strong>{" "}
-                                {selectedItem.aciklama}
-                            </div>
-                        )}
-                        {selectedItem.path && (
-                            <div>
-                                <strong>Yol:</strong> {selectedItem.path}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
 
             {/* Kazanımlar */}
             {dersData && selectedDers && dersData.yks[selectedDers] && (
